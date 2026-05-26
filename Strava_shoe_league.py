@@ -179,9 +179,9 @@ with col2:
                 # Remove code from URL and reload so dropdown picks up new athlete
                 components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
                 st.stop()
+            st.write("Token response:", token)  # DEBUG: show the token response
             else:
                 st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
-            st.write("Token response:", token)  # DEBUG: show the token response
 
 # Refresh button: fetch activities and rebuild league if helper exists
 if st.button("Refresh activities (fetch)"):
