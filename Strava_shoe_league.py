@@ -150,7 +150,7 @@ athlete_ids = find_athlete_ids()
 col1, col2 = st.columns([2,1])
 with col1:
     athlete = st.selectbox("Select athlete (by id)", options=[None] + athlete_ids, index=0)
-wwith col2:
+with col2:
     # Build URL from secrets/env/session if possible
     auth_url = build_auth_url()
     if auth_url:
