@@ -149,7 +149,12 @@ st.title("Strava Shoe League")
 athlete_ids = find_athlete_ids()
 col1, col2 = st.columns([2,1])
 with col1:
-    athlete = st.selectbox("Select athlete (by id)", options=[None] + athlete_ids, index=0)
+    default_athlete = st.session_state.get("current_athlete_id")
+    if default_athlete in athlete_ids:
+        default_index = athlete_ids.index(default_athlete) + 1  # +1 for None at index 0
+    else:
+        default_index = 0
+    athlete = st.selectbox("Select athlete (by id)", options=[None] + athlete_ids, index=default_index)
 with col2:
     # Build URL from secrets/env/session if possible
     auth_url = build_auth_url()
@@ -165,19 +170,18 @@ with col2:
         if code_val:
             token = _exchange_code_for_token(code_val)
             st.write("Token response:", token)  # DEBUG: show the token response
+            aid = None
             if token and isinstance(token, dict):
-                aid = None
                 if "athlete" in token and isinstance(token["athlete"], dict):
                     aid = token["athlete"].get("id")
-                if aid:
-                    st.session_state["current_athlete_id"] = int(aid)
-                    st.success(f"Connected to Strava as athlete {aid}.")
-                else:
-                    st.error("No athlete ID found in token response.")
+            if aid:
+                st.session_state["current_athlete_id"] = int(aid)
+                st.success(f"Connected to Strava as athlete {aid}. Reloading…")
+                # Remove code from URL and reload so dropdown picks up new athlete
                 components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
                 st.stop()
-    else:
-        st.error("Failed to exchange code for token. Check your client secret and redirect URI.")
+            else:
+                st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
 
 # Refresh button: fetch activities and rebuild league if helper exists
 if st.button("Refresh activities (fetch)"):
