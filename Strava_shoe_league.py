@@ -169,7 +169,6 @@ with col2:
                 code_val = code_list[0]
         if code_val:
             token = _exchange_code_for_token(code_val)
-            st.write("Token response:", token)  # DEBUG: show the token response
             aid = None
             if token and isinstance(token, dict):
                 if "athlete" in token and isinstance(token["athlete"], dict):
@@ -182,6 +181,7 @@ with col2:
                 st.stop()
             else:
                 st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
+        st.write("Token response:", token)  # DEBUG: show the token response
 
 # Refresh button: fetch activities and rebuild league if helper exists
 if st.button("Refresh activities (fetch)"):
