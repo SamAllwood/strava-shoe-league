@@ -150,13 +150,13 @@ athlete_ids = find_athlete_ids()
 col1, col2 = st.columns([2,1])
 with col1:
     athlete = st.selectbox("Select athlete (by id)", options=[None] + athlete_ids, index=0)
-with col2:
+wwith col2:
     # Build URL from secrets/env/session if possible
     auth_url = build_auth_url()
     if auth_url:
         st.markdown(f"[Connect to Strava]({auth_url})")
         # capture code from redirect and exchange for token
-        qp = st.query_params
+        qp = get_query_params()
         code_val = None
         if isinstance(qp, dict):
             code_list = qp.get("code") or qp.get("Code") or qp.get("CODE")
@@ -164,7 +164,13 @@ with col2:
                 code_val = code_list[0]
         if code_val:
             token = _exchange_code_for_token(code_val)
+            # Set athlete id in session state if available in token response
             if token:
+                aid = None
+                if isinstance(token, dict) and "athlete" in token and isinstance(token["athlete"], dict):
+                    aid = token["athlete"].get("id")
+                if aid:
+                    st.session_state["current_athlete_id"] = int(aid)
                 st.success("Connected to Strava.")
                 components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
                 st.stop()
