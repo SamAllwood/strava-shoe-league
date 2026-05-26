@@ -23,6 +23,23 @@ except Exception:
 st.set_page_config(page_title="Strava Shoe League", layout="wide")
 
 # helpers
+def get_query_params():
+    """
+    Return URL query params in a version-compatible way.
+    Tries st.get_query_params -> st.experimental_get_query_params -> st.query_params -> {}.
+    """
+    for name in ("get_query_params", "experimental_get_query_params"):
+        fn = getattr(st, name, None)
+        if callable(fn):
+            try:
+                return fn()
+            except Exception:
+                pass
+    try:
+        return st.query_params if isinstance(st.query_params, dict) else dict(st.query_params)
+    except Exception:
+        return {}
+    
 def find_athlete_ids():
     ids = set()
     # look for activities and league CSVs produced previously
