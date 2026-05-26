@@ -92,7 +92,7 @@ def _exchange_code_for_token(code: str):
     client_id = st.session_state.get("_tmp_client_id") or _get_secret("STRAVA_CLIENT_ID")
     client_secret = st.session_state.get("_tmp_client_secret") or _get_secret("STRAVA_CLIENT_SECRET")
     redirect = st.session_state.get("_tmp_redirect") or _get_secret("STRAVA_REDIRECT_URI")
-    st.write
+    st.write("Client ID:", client_id)  # DEBUG: show client ID (but not secret) to confirm we're picking it up
     if not client_id or not client_secret or not redirect:
         # do not crash — instruct the user to fill the inputs
         st.error("Missing client credentials. Enter Client ID / Client Secret / Redirect URI in the Connect panel and retry.")
