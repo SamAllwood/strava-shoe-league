@@ -1,0 +1,7 @@
+streamlit
+pandas
+requests
+uuid
+datetime
+zipfile
+io
