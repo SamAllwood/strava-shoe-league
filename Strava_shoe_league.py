@@ -164,30 +164,20 @@ with col2:
                 code_val = code_list[0]
         if code_val:
             token = _exchange_code_for_token(code_val)
-            # Set athlete id in session state if available in token response
-            if token:
+            st.write("Token response:", token)  # DEBUG: show the token response
+            if token and isinstance(token, dict):
                 aid = None
-                if isinstance(token, dict) and "athlete" in token and isinstance(token["athlete"], dict):
+                if "athlete" in token and isinstance(token["athlete"], dict):
                     aid = token["athlete"].get("id")
                 if aid:
                     st.session_state["current_athlete_id"] = int(aid)
-                st.success("Connected to Strava.")
+                    st.success(f"Connected to Strava as athlete {aid}.")
+                else:
+                    st.error("No athlete ID found in token response.")
                 components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
                 st.stop()
     else:
-        st.write("No saved STRAVA settings found. Enter your Strava app credentials below, then click Create Connect URL.")
-        ci = st.text_input("Client ID", value=st.session_state.get("_tmp_client_id", ""))
-        cs = st.text_input("Client Secret", value=st.session_state.get("_tmp_client_secret", ""), type="password")
-        rd = st.text_input("Redirect URI", value=st.session_state.get("_tmp_redirect", ""))
-        if st.button("Create Connect URL"):
-            st.session_state["_tmp_client_id"] = ci
-            st.session_state["_tmp_client_secret"] = cs
-            st.session_state["_tmp_redirect"] = rd
-            generated = build_auth_url_from_params(ci, rd)
-            if generated:
-                st.markdown(f"[Connect to Strava]({generated})")
-            else:
-                st.error("Provide both Client ID and Redirect URI to build the Connect URL.")
+        st.error("Failed to exchange code for token. Check your client secret and redirect URI.")
 
 # Refresh button: fetch activities and rebuild league if helper exists
 if st.button("Refresh activities (fetch)"):
