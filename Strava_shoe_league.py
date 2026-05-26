@@ -173,13 +173,13 @@ with col2:
             if token and isinstance(token, dict):
                 if "athlete" in token and isinstance(token["athlete"], dict):
                     aid = token["athlete"].get("id")
+                    st.write("Token response:", token)  # DEBUG: show the token response
             if aid:
                 st.session_state["current_athlete_id"] = int(aid)
                 st.success(f"Connected to Strava as athlete {aid}. Reloading…")
                 # Remove code from URL and reload so dropdown picks up new athlete
                 components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
                 st.stop()
-            st.write("Token response:", token)  # DEBUG: show the token response
             else:
                 st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
 
