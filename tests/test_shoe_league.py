@@ -1,4 +1,3 @@
-import pytest
 import pandas as pd
 from Strava_shoe_league import main_function  # Replace with actual function names
 from strava_tools import load_token_for_athlete, ensure_athlete_activities_and_league
