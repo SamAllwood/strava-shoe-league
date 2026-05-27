@@ -177,12 +177,23 @@ with col2:
                     st.write("Token response:", token)  # DEBUG: show the token response
             if aid:
                 st.session_state["current_athlete_id"] = int(aid)
-                st.success(f"Connected to Strava as athlete {aid}. Reloading…")
-                # Remove code from URL and reload so dropdown picks up new athlete
-                components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
-                st.stop()
-            else:
-                st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
+                st.success(f"Connected to Strava as athlete {aid}. Fetching activities…")
+                  # Immediately fetch activities for this athlete
+                fetcher = getattr(strava_tools, "perform_fetch_and_build_for_athlete", None)
+                if callable(fetcher):
+                    try:
+                        ok, out_csv = fetcher(script_dir, int(aid))
+                        if ok:
+                            st.success("Fetched activities and rebuilt league.")
+                        else:
+                            st.warning("Fetcher ran but reported no output.")
+                    except Exception as e:
+                        st.error(f"Fetch after connect failed: {e}")
+            # Remove code from URL and reload so dropdown picks up new athlete
+            components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
+            st.stop()
+        else:
+            st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
 
 # Refresh button: fetch activities and rebuild league if helper exists
 if st.button("Refresh activities (fetch)"):
