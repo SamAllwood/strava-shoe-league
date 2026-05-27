@@ -163,12 +163,14 @@ with col2:
         st.markdown(f"[Connect to Strava]({auth_url})")
         # capture code from redirect and exchange for token
         qp = get_query_params()
-        st.write("Query params:", qp)
         code_val = None
         if isinstance(qp, dict):
-            code_list = qp.get("code") or qp.get("Code") or qp.get("CODE")
-            if isinstance(code_list, list) and code_list:
-                code_val = code_list[0]
+            code_item = qp.get("code") or qp.get("Code") or qp.get("CODE")
+            if isinstance(code_item, list) and code_item:
+                code_val = code_item[0]
+            elif isinstance(code_item, str):
+                code_val = code_item
+            st.write("Extracted code_val:", code_val)
         if code_val:
             token = _exchange_code_for_token(code_val)
             aid = None
