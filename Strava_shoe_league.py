@@ -113,7 +113,7 @@ def _exchange_code_for_token(code: str):
     except Exception as e:
         st.error(f"Token exchange failed: {e}")
         return None
-
+    st.write("Token response:", token_resp)
     # try to persist token using known helper names (best-effort)
     try:
         saver = getattr(strava_tools, "save_token_for_token_response", None) or getattr(strava_tools, "save_token", None) or getattr(strava_tools, "save_token_for_athlete", None)
