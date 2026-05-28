@@ -9,6 +9,62 @@ from typing import Optional
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strava_tokens.db")
 
+
+def perform_fetch_and_build_for_athlete(script_dir, athlete_id):
+    """
+    Fetch activities from Strava for the given athlete, save as JSON,
+    build the league table, and save as CSV.
+    Returns (True, csv_path) on success, (False, None) on failure.
+    """
+    import time
+
+    # 1. Load token
+    token_info = load_token_for_athlete(athlete_id)
+    if not token_info:
+        return False, None
+
+    access_token = token_info.get("access_token") or token_info.get("token")
+    if not access_token:
+        return False, None
+
+    # 2. Fetch activities from Strava API
+    activities = []
+    page = 1
+    per_page = 200
+    after = 0  # Unix timestamp; set to 0 to fetch all
+    headers = {"Authorization": f"Bearer {access_token}"}
+    while True:
+        url = f"https://www.strava.com/api/v3/athlete/activities?per_page={per_page}&page={page}&after={after}"
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 401:
+            # Token expired or invalid
+            return False, None
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        activities.extend(batch)
+        if len(batch) < per_page:
+            break
+        page += 1
+        time.sleep(0.2)  # Be nice to the API
+
+    # 3. Save activities as JSON
+    data_dir = os.path.join(script_dir, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    activities_path = os.path.join(data_dir, f"activities_{athlete_id}.json")
+    with open(activities_path, "w") as f:
+        import json
+        json.dump(activities, f)
+
+    # 4. Build league table and save as CSV
+    activities_df = pd.DataFrame(activities)
+    league_df = build_league_table(activities_df)
+    csv_path = os.path.join(data_dir, f"shoe_league_table_{athlete_id}.csv")
+    league_df.to_csv(csv_path, index=False)
+
+    return True, csv_path
+
 def init_db(db_path):
     """Initialize the SQLite database for storing Strava tokens."""
     conn = sqlite3.connect(db_path)

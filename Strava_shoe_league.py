@@ -92,7 +92,6 @@ def _exchange_code_for_token(code: str):
     client_id = st.session_state.get("_tmp_client_id") or _get_secret("STRAVA_CLIENT_ID")
     client_secret = st.session_state.get("_tmp_client_secret") or _get_secret("STRAVA_CLIENT_SECRET")
     redirect = st.session_state.get("_tmp_redirect") or _get_secret("STRAVA_REDIRECT_URI")
-    st.write("Client ID:", client_id)  # DEBUG: show client ID (but not secret) to confirm we're picking it up
     if not client_id or not client_secret or not redirect:
         # do not crash — instruct the user to fill the inputs
         st.error("Missing client credentials. Enter Client ID / Client Secret / Redirect URI in the Connect panel and retry.")
@@ -113,7 +112,6 @@ def _exchange_code_for_token(code: str):
     except Exception as e:
         st.error(f"Token exchange failed: {e}")
         return None
-    st.write("Token response:", token_resp)
     # try to persist token using known helper names (best-effort)
     try:
         saver = getattr(strava_tools, "save_token_for_token_response", None) or getattr(strava_tools, "save_token", None) or getattr(strava_tools, "save_token_for_athlete", None)
@@ -170,22 +168,23 @@ with col2:
                 code_val = code_item[0]
             elif isinstance(code_item, str):
                 code_val = code_item
-            st.write("Extracted code_val:", code_val)
         if code_val:
             token = _exchange_code_for_token(code_val)
             aid = None
             if token and isinstance(token, dict):
                 if "athlete" in token and isinstance(token["athlete"], dict):
                     aid = token["athlete"].get("id")
-                    st.write("Token response:", token)  # DEBUG: show the token response
             if aid:
                 st.session_state["current_athlete_id"] = int(aid)
                 st.success(f"Connected to Strava as athlete {aid}. Fetching activities…")
                   # Immediately fetch activities for this athlete
+                st.write("About to fetch activities for athlete", aid) # debug line
                 fetcher = getattr(strava_tools, "perform_fetch_and_build_for_athlete", None)
                 if callable(fetcher):
                     try:
+                        st.write("Calling fetcher...")  # debug line
                         ok, out_csv = fetcher(script_dir, int(aid))
+                        st.write("Fetcher returned:", ok, out_csv) # debug line
                         if ok:
                             st.success("Fetched activities and rebuilt league.")
                         else:
