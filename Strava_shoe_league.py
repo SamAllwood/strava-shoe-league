@@ -390,6 +390,52 @@ if isinstance(df, pd.DataFrame) and not df.empty and isinstance(runs_df, pd.Data
                 styler = styler.format({"Date": lambda ts: ts.strftime("%d %B %Y") if not pd.isna(ts) else ""})
             st.dataframe(styler)
 
+# ---- Marathon Listing (races exceeding 42 km) ----
+st.markdown("---")
+st.subheader("Marathon Listing")
+if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
+    mara = runs_df.copy()
+    mara["_dist_km"] = pd.to_numeric(mara.get("distance", 0), errors="coerce").fillna(0) / 1000.0
+    # Races are flagged by Strava with workout_type == "1.0"; a marathon here is
+    # any race exceeding 42 km.
+    if "workout_type" in mara.columns:
+        is_race = mara["workout_type"].astype(str).eq("1.0")
+    else:
+        is_race = pd.Series(False, index=mara.index)
+    mara = mara[is_race & (mara["_dist_km"] > 42.0)].copy()
+
+    st.caption(f"Marathons to date: {len(mara)}")
+    if mara.empty:
+        st.info("No marathons (races over 42 km) found.")
+    else:
+        # map gear_id -> shoe name using the league table (fall back to the id)
+        gid_to_shoe = {}
+        if isinstance(df, pd.DataFrame) and not df.empty and "gear_id" in df.columns and "Shoe" in df.columns:
+            gid_to_shoe = dict(zip(df["gear_id"].astype(str), df["Shoe"].astype(str)))
+
+        _mt = pd.to_numeric(mara.get("moving_time", 0), errors="coerce").fillna(0)
+        out = pd.DataFrame({
+            "Race": mara.get("name", ""),
+            "Date": pd.to_datetime(mara.get("start_date_local", ""), errors="coerce"),
+            "Shoes Worn": mara.get("gear_id", "").astype(str).map(lambda g: gid_to_shoe.get(g, g)),
+            "Distance (km)": mara["_dist_km"].round(2),
+            "Ascent (m)": pd.to_numeric(mara.get("total_elevation_gain", 0), errors="coerce").fillna(0).round(0),
+            "Average Pace (min/km)": [
+                strava_tools.secs_to_minsec_str(t / d) if d > 0 else "-"
+                for t, d in zip(_mt, mara["_dist_km"])
+            ],
+        })
+        out = out.sort_values("Date", ascending=False).reset_index(drop=True)
+
+        # display-only formatting (keep underlying frame numeric)
+        ui = out.copy()
+        ui["Date"] = ui["Date"].apply(lambda ts: ts.strftime("%d %B %Y") if pd.notna(ts) else "")
+        ui["Ascent (m)"] = ui["Ascent (m)"].apply(lambda v: f"{int(v)}" if pd.notna(v) else "")
+        st.dataframe(ui)
+else:
+    st.caption("Marathons to date: 0")
+    st.info("No runs data available.")
+
 # small footer
 st.markdown("---")
 st.write("This app derives all tables from activities JSON; CSV outputs are produced as artifacts.")
