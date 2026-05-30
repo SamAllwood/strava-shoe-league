@@ -405,7 +405,7 @@ if isinstance(df, pd.DataFrame) and not df.empty and isinstance(runs_df, pd.Data
 
 # ---- Marathon Listing (races exceeding 41 km) ----
 st.markdown("---")
-st.subheader("Marathon Listing")
+st.subheader("Marathons")
 if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
     mara = runs_df.copy()
     mara["_dist_km"] = pd.to_numeric(mara.get("distance", 0), errors="coerce").fillna(0) / 1000.0
