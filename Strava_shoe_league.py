@@ -439,6 +439,7 @@ if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
             "Date": date_col,
             "Shoes Worn": mara.get("gear_id", "").astype(str).map(lambda g: gid_to_shoe.get(g, g)),
             "Distance (km)": mara["_dist_km"].round(2),
+            "Time": mara.get("elapsed_time", 0).apply(strava_tools.secs_to_minsec_str),
             "Ascent (m)": pd.to_numeric(mara.get("total_elevation_gain", 0), errors="coerce").fillna(0).round(0),
             "Average Pace (min/km)": [
                 strava_tools.secs_to_minsec_str(t / d) if d > 0 else "-"
@@ -456,6 +457,7 @@ if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
                 "Date": st.column_config.DateColumn("Date", format="DD MMMM YYYY"),
                 "Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f"),
                 "Ascent (m)": st.column_config.NumberColumn("Ascent (m)", format="%d"),
+                "Time": st.column_config.TextColumn("Time"),
             },
         )
 else:
