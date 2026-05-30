@@ -442,10 +442,42 @@ def ensure_athlete_activities_and_league(script_dir: str, csv_path: str, athlete
     return df, runs_df, csv_to_use or csv_path
 
 
-def perform_fetch_and_build_for_athlete(script_dir: str, athlete_id: int, access_token: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+def _load_existing_activities(activities_path: str) -> List[Dict[str, Any]]:
+    """Return saved activities as a list of records, or [] if none/unreadable."""
+    if not (activities_path and os.path.exists(activities_path)):
+        return []
+    try:
+        existing = pd.read_json(activities_path)
+        if isinstance(existing, pd.DataFrame) and not existing.empty:
+            return existing.to_dict(orient="records")
+    except Exception:
+        pass
+    return []
+
+
+def _newest_after_epoch(records: List[Dict[str, Any]]) -> Optional[int]:
+    """Epoch seconds of the newest start_date_local across records, or None."""
+    dates = [r.get("start_date_local") or r.get("start_date") for r in records]
+    dates = [d for d in dates if d is not None and not (isinstance(d, float) and pd.isna(d))]
+    if not dates:
+        return None
+    try:
+        newest = pd.to_datetime(pd.Series(dates), errors="coerce", utc=True).max()
+        if pd.notna(newest):
+            return int(newest.timestamp())
+    except Exception:
+        pass
+    return None
+
+
+def perform_fetch_and_build_for_athlete(script_dir: str, athlete_id: int, access_token: Optional[str] = None, incremental: bool = True) -> Tuple[bool, Optional[str]]:
     """
     Fetch activities from Strava, save them, fetch gear details and build the shoe
     league (with real shoe names). Returns (True, csv_path) or (False, None).
+
+    When incremental=True and a saved activities file exists, only activities newer
+    than the most recent saved one are fetched and merged into the file (deduped by
+    id) — avoiding a full re-download. A full fetch is done when no file exists.
     """
     # Resolve an access token from the saved token if not supplied.
     if not access_token:
@@ -459,17 +491,29 @@ def perform_fetch_and_build_for_athlete(script_dir: str, athlete_id: int, access
     if not access_token:
         return False, None
 
-    # Fetch all activities (paginated).
-    activities = []
+    data_dir = _data_dir(script_dir)
+    activities_path = os.path.join(data_dir, f"activities_{athlete_id}.json")
+    gear_ids_path = os.path.join(data_dir, f"gear_ids_{athlete_id}.json")
+    all_gear_path = os.path.join(data_dir, f"all_gear_{athlete_id}.json")
+    out_csv = os.path.join(data_dir, f"shoe_league_table_{athlete_id}.csv")
+
+    existing = _load_existing_activities(activities_path) if incremental else []
+    after = _newest_after_epoch(existing) if existing else None
+
+    # Fetch (paginated). With `after` set, Strava returns only newer activities.
+    new_acts = []
     page = 1
     per_page = 200
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
         while True:
+            params = {"per_page": per_page, "page": page}
+            if after:
+                params["after"] = after
             resp = requests.get(
                 "https://www.strava.com/api/v3/athlete/activities",
                 headers=headers,
-                params={"per_page": per_page, "page": page},
+                params=params,
                 timeout=30,
             )
             if resp.status_code == 401:
@@ -478,27 +522,32 @@ def perform_fetch_and_build_for_athlete(script_dir: str, athlete_id: int, access
             batch = resp.json()
             if not batch:
                 break
-            activities.extend(batch)
+            new_acts.extend(batch)
             if len(batch) < per_page:
                 break
             page += 1
             time.sleep(0.2)  # be nice to the API
     except Exception:
-        if not activities:
+        if not new_acts and not existing:
             return False, None
 
-    if not activities:
+    # Merge new + existing, dedupe by activity id, newest first.
+    merged_map = {}
+    for a in existing + new_acts:
+        try:
+            merged_map[int(a["id"])] = a
+        except Exception:
+            continue
+    merged = sorted(merged_map.values(), key=lambda x: str(x.get("start_date_local") or ""), reverse=True)
+    if not merged:
         return False, None
 
-    data_dir = _data_dir(script_dir)
-    activities_path = save_activities_for_athlete(athlete_id, activities, script_dir)
-    gear_ids_path = os.path.join(data_dir, f"gear_ids_{athlete_id}.json")
-    all_gear_path = os.path.join(data_dir, f"all_gear_{athlete_id}.json")
-    out_csv = os.path.join(data_dir, f"shoe_league_table_{athlete_id}.csv")
+    activities_path = save_activities_for_athlete(athlete_id, merged, script_dir)
 
-    # Gear pipeline -> real shoe names / retired / first-use in the league table.
-    extract_gear_ids_from_activities(activities_path, gear_ids_path)
-    fetch_gear_details(gear_ids_path, all_gear_path, access_token)
-    combine_shoes(all_gear_path, activities_path, out_csv)
+    # Rebuild gear/league when we got new activities, or if artifacts are missing.
+    if new_acts or not (os.path.exists(all_gear_path) and os.path.exists(out_csv)):
+        extract_gear_ids_from_activities(activities_path, gear_ids_path)
+        fetch_gear_details(gear_ids_path, all_gear_path, access_token)
+        combine_shoes(all_gear_path, activities_path, out_csv)
 
     return True, out_csv

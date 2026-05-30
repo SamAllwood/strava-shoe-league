@@ -39,6 +39,24 @@ def test_secs_to_minsec_str_invalid():
     assert strava_tools.secs_to_minsec_str("not a number") == "-"
 
 
+# --- incremental fetch helpers --------------------------------------------
+
+def test_newest_after_epoch_picks_latest():
+    records = [
+        {"id": 1, "start_date_local": "2024-01-01T08:00:00Z"},
+        {"id": 2, "start_date_local": "2024-03-02T18:00:00Z"},  # newest
+        {"id": 3, "start_date_local": "2024-02-15T07:00:00Z"},
+    ]
+    after = strava_tools._newest_after_epoch(records)
+    # epoch for 2024-03-02T18:00:00Z
+    assert after == 1709402400
+
+
+def test_newest_after_epoch_empty_or_missing():
+    assert strava_tools._newest_after_epoch([]) is None
+    assert strava_tools._newest_after_epoch([{"id": 1}]) is None
+
+
 # --- compute_shoe_league --------------------------------------------------
 
 def test_compute_shoe_league_aggregates_per_shoe():

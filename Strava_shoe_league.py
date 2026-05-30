@@ -180,19 +180,32 @@ if code_val and code_val != st.session_state.get("_last_code"):
         aid = int(aid)
         st.session_state["current_athlete_id"] = aid
         st.session_state["athlete_select"] = aid  # seed the dropdown selection
-        msg = (None, None)
-        fetcher = getattr(strava_tools, "perform_fetch_and_build_for_athlete", None)
-        if callable(fetcher):
-            try:
-                ok, _ = fetcher(script_dir, aid)
-                if ok:
-                    msg = ("success", f"Connected as athlete {aid}. Fetched activities and rebuilt league.")
-                else:
-                    msg = ("warning", f"Connected as athlete {aid}, but the fetcher reported no output.")
-            except Exception as e:
-                msg = ("error", f"Connected as athlete {aid}, but fetch failed: {e}")
+        # Only download from Strava on first connect (no saved activities yet).
+        # If we already have a saved activities file, reuse it — the load block
+        # below reads it from disk. Use the "Refresh activities" button to fetch
+        # fresh data on demand.
+        existing_path = None
+        try:
+            existing_path = strava_tools.latest_activities_path(script_dir, athlete_id=aid)
+        except Exception:
+            existing_path = None
+        has_saved = bool(existing_path and os.path.exists(existing_path))
+
+        if has_saved:
+            msg = ("success", f"Connected as athlete {aid}. Loaded saved activities (use Refresh to fetch new data).")
         else:
-            msg = ("success", f"Connected as athlete {aid}.")
+            fetcher = getattr(strava_tools, "perform_fetch_and_build_for_athlete", None)
+            if callable(fetcher):
+                try:
+                    ok, _ = fetcher(script_dir, aid)
+                    if ok:
+                        msg = ("success", f"Connected as athlete {aid}. Fetched activities and built league.")
+                    else:
+                        msg = ("warning", f"Connected as athlete {aid}, but the fetcher reported no output.")
+                except Exception as e:
+                    msg = ("error", f"Connected as athlete {aid}, but fetch failed: {e}")
+            else:
+                msg = ("success", f"Connected as athlete {aid}.")
         st.session_state["_flash"] = msg
     else:
         st.session_state["_flash"] = ("error", "Token exchange did not return an athlete. Check your Strava app settings and try connecting again.")
@@ -246,7 +259,7 @@ if st.button("Refresh activities (fetch)"):
             if callable(fetcher):
                 ok, out_csv = fetcher(script_dir, int(athlete))
                 if ok:
-                    st.success("Fetched activities and rebuilt league.")
+                    st.success("Fetched any new activities and updated the league.")
                 else:
                     st.warning("Fetcher ran but reported no output.")
             else:
