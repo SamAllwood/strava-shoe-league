@@ -1,6 +1,6 @@
 # Strava Shoe League
 
-This project is a Python application that integrates with the Strava API to retrieve athlete data, process activities, and generate a shoe league table. The application is designed to provide insights into an athlete's running activities based on the shoes they have used.
+This project is a Python application that integrates with the Strava API to retrieve athlete data, process activities, generate a shoe league table and present marathon races completed. Just for fun.
 
 ## Project Structure
 
@@ -13,6 +13,7 @@ strava-shoe-league
 ├── README.md                    # Documentation for the project
 ├── data
 │   └── shoe_league_table.csv    # CSV file for shoe league data
+│   └── activities_19000711.json # JSON file containing strava data for Sam Allwood as an example. Saves downloading all the data every time you run app.
 └── tests
     └── test_shoe_league.py      # Unit tests for the application
 ```

@@ -427,9 +427,16 @@ if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
             gid_to_shoe = dict(zip(df["gear_id"].astype(str), df["Shoe"].astype(str)))
 
         _mt = pd.to_numeric(mara.get("moving_time", 0), errors="coerce").fillna(0)
+        date_col = pd.to_datetime(mara.get("start_date_local", ""), errors="coerce")
+        # Drop timezone so the displayed date matches the recorded local date
+        # (and keep it as a real datetime so the table sorts chronologically).
+        try:
+            date_col = date_col.dt.tz_localize(None)
+        except (TypeError, AttributeError):
+            pass
         out = pd.DataFrame({
             "Race": mara.get("name", ""),
-            "Date": pd.to_datetime(mara.get("start_date_local", ""), errors="coerce"),
+            "Date": date_col,
             "Shoes Worn": mara.get("gear_id", "").astype(str).map(lambda g: gid_to_shoe.get(g, g)),
             "Distance (km)": mara["_dist_km"].round(2),
             "Ascent (m)": pd.to_numeric(mara.get("total_elevation_gain", 0), errors="coerce").fillna(0).round(0),
@@ -440,11 +447,17 @@ if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
         })
         out = out.sort_values("Date", ascending=False).reset_index(drop=True)
 
-        # display-only formatting (keep underlying frame numeric)
-        ui = out.copy()
-        ui["Date"] = ui["Date"].apply(lambda ts: ts.strftime("%d %B %Y") if pd.notna(ts) else "")
-        ui["Ascent (m)"] = ui["Ascent (m)"].apply(lambda v: f"{int(v)}" if pd.notna(v) else "")
-        st.dataframe(ui)
+        # Keep underlying dtypes (datetime/numeric) so column sorting works;
+        # format for display via column_config.
+        st.dataframe(
+            out,
+            hide_index=True,
+            column_config={
+                "Date": st.column_config.DateColumn("Date", format="DD MMMM YYYY"),
+                "Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f"),
+                "Ascent (m)": st.column_config.NumberColumn("Ascent (m)", format="%d"),
+            },
+        )
 else:
     st.caption("Marathons to date: 0")
     st.info("No runs data available.")
