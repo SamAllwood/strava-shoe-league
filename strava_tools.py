@@ -1,68 +1,33 @@
-# This file contains utility functions for interacting with the Strava API, managing tokens, and processing activity data.
+# Utility functions for interacting with the Strava API, managing tokens, and
+# processing activity data into a shoe-league table.
+#
+# Activity / gear / league files all live under <script_dir>/data/.
+
+import os
+import csv
+import glob
+import json
+import time
+import sqlite3
+from datetime import datetime
+from typing import Optional, Tuple, List, Dict, Any
 
 import pandas as pd
-import os
-import json
-import sqlite3
 import requests
-from typing import Optional
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strava_tokens.db")
 
 
-def perform_fetch_and_build_for_athlete(script_dir, athlete_id):
-    """
-    Fetch activities from Strava for the given athlete, save as JSON,
-    build the league table, and save as CSV.
-    Returns (True, csv_path) on success, (False, None) on failure.
-    """
-    import time
+def _data_dir(script_dir: str) -> str:
+    """Return (and create) the data directory used for all per-athlete files."""
+    d = os.path.join(script_dir, "data")
+    os.makedirs(d, exist_ok=True)
+    return d
 
-    # 1. Load token
-    token_info = load_token_for_athlete(athlete_id)
-    if not token_info:
-        return False, None
 
-    access_token = token_info.get("access_token") or token_info.get("token")
-    if not access_token:
-        return False, None
-
-    # 2. Fetch activities from Strava API
-    activities = []
-    page = 1
-    per_page = 200
-    after = 0  # Unix timestamp; set to 0 to fetch all
-    headers = {"Authorization": f"Bearer {access_token}"}
-    while True:
-        url = f"https://www.strava.com/api/v3/athlete/activities?per_page={per_page}&page={page}&after={after}"
-        resp = requests.get(url, headers=headers, timeout=30)
-        if resp.status_code == 401:
-            # Token expired or invalid
-            return False, None
-        resp.raise_for_status()
-        batch = resp.json()
-        if not batch:
-            break
-        activities.extend(batch)
-        if len(batch) < per_page:
-            break
-        page += 1
-        time.sleep(0.2)  # Be nice to the API
-
-    # 3. Save activities as JSON
-    data_dir = os.path.join(script_dir, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    activities_path = os.path.join(data_dir, f"activities_{athlete_id}.json")
-    with open(activities_path, "w") as f:
-        json.dump(activities, f)
-
-    # 4. Build league table and save as CSV
-    activities_df = pd.DataFrame(activities)
-    league_df = build_league_table(activities_df)
-    csv_path = os.path.join(data_dir, f"shoe_league_table_{athlete_id}.csv")
-    league_df.to_csv(csv_path, index=False)
-
-    return True, csv_path
+# --------------------------------------------------------------------------- #
+# Token storage (SQLite)
+# --------------------------------------------------------------------------- #
 
 def init_db(db_path):
     """Initialize the SQLite database for storing Strava tokens."""
@@ -76,12 +41,13 @@ def init_db(db_path):
         """)
     conn.close()
 
+
 def save_token(token_json):
-    """Save the Strava token for the athlete."""
+    """Save the Strava token for the athlete (keyed by athlete id)."""
     athlete_id = token_json.get("athlete", {}).get("id")
     if athlete_id is None:
         raise ValueError("Invalid token JSON: missing athlete ID.")
-    
+
     conn = sqlite3.connect(DB_PATH)
     with conn:
         conn.execute("""
@@ -90,8 +56,9 @@ def save_token(token_json):
         """, (athlete_id, json.dumps(token_json)))
     conn.close()
 
+
 def load_token_for_athlete(athlete_id):
-    """Load the Strava token for the specified athlete."""
+    """Load the full saved Strava token dict for the specified athlete."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT raw_json FROM tokens WHERE athlete_id = ?", (athlete_id,))
@@ -99,29 +66,229 @@ def load_token_for_athlete(athlete_id):
     conn.close()
     return json.loads(row[0]) if row else None
 
+
 def refresh_token_if_needed(token_info):
-    """Refresh the Strava token if it is expired."""
-    # Implement token refresh logic here
-    # This is a placeholder for the actual implementation
+    """Refresh the Strava token if it is expired (placeholder — returns as-is)."""
     return token_info
 
-def latest_activities_path(script_dir, athlete_id):
-    """Return the path to the latest activities JSON file for the athlete."""
-    return os.path.join(script_dir, f"data/activities_{athlete_id}.json")
 
-def ensure_athlete_activities_and_league(script_dir, csv_path, athlete_id):
-    """Ensure athlete activities are loaded and the league table is built."""
-    activities_path = latest_activities_path(script_dir, athlete_id)
-    if not os.path.exists(activities_path):
-        raise FileNotFoundError(f"No activities file found for athlete {athlete_id}.")
+# --------------------------------------------------------------------------- #
+# Activity / gear file helpers
+# --------------------------------------------------------------------------- #
 
-    # Load activities and process to create league table
-    activities_df = pd.read_json(activities_path)
-    league_df = build_league_table(activities_df)
-    
-    # Save league table to CSV
-    league_df.to_csv(csv_path, index=False)
-    return league_df, activities_df, csv_path
+def latest_activities_path(script_dir: str, athlete_id: Optional[int] = None) -> Optional[str]:
+    """
+    If athlete_id is given, return data/activities_{athlete_id}.json (may not exist).
+    Otherwise return the most recent data/activities_*.json, or None.
+    """
+    data_dir = _data_dir(script_dir)
+    if athlete_id is not None:
+        return os.path.join(data_dir, f"activities_{athlete_id}.json")
+
+    files = glob.glob(os.path.join(data_dir, "activities_*.json"))
+    if files:
+        files.sort(key=os.path.getmtime, reverse=True)
+        return files[0]
+    return None
+
+
+def save_activities_for_athlete(athlete_id: int, activities: List[Dict[str, Any]], script_dir: str) -> str:
+    """Save activities to data/activities_{athlete_id}.json and return the path."""
+    data_dir = _data_dir(script_dir)
+    path = os.path.join(data_dir, f"activities_{athlete_id}.json")
+    safe_acts = []
+    for a in activities:
+        a = dict(a)  # copy so we don't mutate the caller's data
+        a["athlete_id"] = athlete_id
+        safe_acts.append(a)
+    pd.DataFrame(safe_acts).to_json(path, orient="records", date_format="iso")
+    return path
+
+
+def extract_gear_ids_from_activities(activities_path, gear_ids_path):
+    """
+    Read activities JSON and write a JSON list of gear ids.
+    Defensive: activities can be dicts missing expected keys or nested gear objects.
+    """
+    with open(activities_path, "r") as f:
+        activities = json.load(f)
+
+    gear_ids = set()
+    for idx, activity in enumerate(activities):
+        try:
+            gear_id = activity.get("gear_id") if isinstance(activity, dict) else None
+
+            if not gear_id:
+                gear = activity.get("gear") if isinstance(activity, dict) else None
+                if isinstance(gear, dict):
+                    gear_id = gear.get("id") or gear.get("uid") or gear.get("gear_id")
+
+            if not gear_id and isinstance(activity, dict):
+                for v in activity.values():
+                    if isinstance(v, dict) and ("id" in v and "name" in v):
+                        gear_id = v.get("id")
+                        break
+
+            if gear_id:
+                gear_ids.add(str(gear_id))
+        except Exception as e:
+            print(f"[extract_gear_ids] Warning: failed for activity index {idx}: {e}")
+
+    with open(gear_ids_path, "w") as f:
+        json.dump(sorted(list(gear_ids)), f, indent=2)
+    print(f"Extracted {len(gear_ids)} gear IDs from activities. Written to {gear_ids_path}")
+
+
+def fetch_gear_details(gear_ids_path, all_gear_path, access_token: Optional[str] = None):
+    """
+    Fetch gear details from Strava for each id in gear_ids_path.
+    Defensive per-id; writes whatever successful responses we get.
+    """
+    with open(gear_ids_path, "r") as f:
+        gear_ids = json.load(f)
+
+    all_gear = []
+    headers = {"Authorization": f"Bearer {access_token}"} if access_token else {}
+    if not access_token:
+        print("[fetch_gear_details] Warning: no access token; gear endpoint may fail.")
+
+    for idx, raw_gid in enumerate(gear_ids):
+        try:
+            gid = raw_gid
+            if isinstance(gid, dict):
+                gid = gid.get("id") or gid.get("uid") or str(gid)
+            gid = str(gid)
+            if not gid:
+                continue
+
+            try:
+                r = requests.get(f"https://www.strava.com/api/v3/gear/{gid}", headers=headers, timeout=15)
+            except Exception as e:
+                print(f"[fetch_gear_details] Network error for gear id {gid}: {e}")
+                continue
+
+            if r.ok:
+                try:
+                    gear_obj = r.json()
+                    if not isinstance(gear_obj, dict) or "id" not in gear_obj:
+                        if isinstance(gear_obj, dict):
+                            gear_obj["id"] = gid
+                        else:
+                            gear_obj = {"id": gid, "raw": gear_obj}
+                    all_gear.append(gear_obj)
+                except Exception as e:
+                    print(f"[fetch_gear_details] Failed to decode JSON for gear {gid}: {e}")
+            else:
+                print(f"[fetch_gear_details] Strava returned {r.status_code} for gear {gid}")
+        except Exception as e:
+            print(f"[fetch_gear_details] Unexpected error at index {idx}: {e}")
+
+    with open(all_gear_path, "w") as f:
+        json.dump(all_gear, f, indent=2)
+    print(f"Wrote details for {len(all_gear)} gear items to {all_gear_path}")
+
+
+def combine_shoes(all_gear_path, activities_path, output_csv):
+    """
+    Build the shoe-league CSV from fetched gear details + activities.
+    Produces real shoe names, retired status, first-use date and per-shoe stats.
+    """
+    with open(all_gear_path, "r") as f:
+        all_gear = json.load(f)
+    with open(activities_path, "r") as f:
+        activities = json.load(f)
+
+    # Only shoes from all_gear (gear ids start with 'g'; bikes start with 'b')
+    shoes = {g["id"]: g for g in all_gear if str(g.get("id", "")).startswith("g")}
+
+    shoe_stats = {}
+    for shoe_id, shoe in shoes.items():
+        shoe_stats[shoe_id] = {
+            "name": shoe.get("name", "Unknown"),
+            "retired": shoe.get("retired", False),
+            "longest_run": 0,
+            "total_distance": 0,
+            "total_elevation_gain": 0,
+            "activity_count": 0,
+            "average_run_length": 0,
+            "total_time": 0,
+            "average_pace": 0,
+            "first_use": None,
+        }
+
+    for activity in activities:
+        gear_id = activity.get("gear_id")
+        if gear_id in shoe_stats:
+            dist = activity.get("distance", 0)
+            elev = activity.get("total_elevation_gain", 0)
+            moving = activity.get("moving_time", 0)
+            date_str = activity.get("start_date_local", activity.get("start_date"))
+            try:
+                date_obj = datetime.strptime(date_str[:19], "%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                date_obj = None
+            s = shoe_stats[gear_id]
+            s["total_distance"] += dist
+            s["total_elevation_gain"] += elev
+            s["longest_run"] = max(s["longest_run"], dist)
+            s["activity_count"] += 1
+            s["total_time"] += moving
+            if date_obj and (s["first_use"] is None or date_obj < s["first_use"]):
+                s["first_use"] = date_obj
+
+    for stats in shoe_stats.values():
+        if stats["activity_count"] > 0:
+            stats["average_run_length"] = stats["total_distance"] / stats["activity_count"]
+        if stats["total_distance"] > 0:
+            stats["average_pace"] = (stats["total_time"] / 60) / (stats["total_distance"] / 1000)
+        stats["first_use_str"] = stats["first_use"].strftime("%b %Y") if stats["first_use"] else "-"
+
+    with open(output_csv, "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow([
+            "Shoe", "gear_id", "Retired", "Runs", "First Use", "Longest Run (km)",
+            "Total Distance (km)", "Total Elevation Gain (km)",
+            "Average Run Length (km)", "Total Time (h)", "Average Pace (min/km)"
+        ])
+        for shoe_id, stats in shoe_stats.items():
+            avg_pace_str = (
+                f"{int(stats['average_pace']):02d}:{int((stats['average_pace'] % 1) * 60):02d}"
+                if stats["average_pace"] > 0 else "-"
+            )
+            retired_str = "Yes" if stats.get("retired") else "No"
+            writer.writerow([
+                stats["name"],
+                shoe_id,
+                retired_str,
+                stats["activity_count"],
+                stats["first_use_str"],
+                round(stats["longest_run"] / 1000, 1),
+                round(stats["total_distance"] / 1000, 1),
+                round(stats["total_elevation_gain"] / 1000, 1),
+                round(stats["average_run_length"] / 1000, 1),
+                round(stats["total_time"] / 3600),
+                avg_pace_str,
+            ])
+    print(f"League table saved to {output_csv}")
+
+
+# --------------------------------------------------------------------------- #
+# League computation (fallback when gear details aren't available)
+# --------------------------------------------------------------------------- #
+
+def secs_to_minsec_str(s):
+    try:
+        s = float(s)
+        if s <= 0:
+            return "-"
+        h = int(s // 3600)
+        m = int((s % 3600) // 60)
+        sec = int(s % 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{sec:02d}"
+        return f"{m}:{sec:02d}"
+    except Exception:
+        return "-"
 
 
 def _compute_shoe_league_internal(runs_df: pd.DataFrame, shoe_lookup_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
@@ -138,6 +305,8 @@ def _compute_shoe_league_internal(runs_df: pd.DataFrame, shoe_lookup_df: Optiona
     r["moving_time_s"] = pd.to_numeric(r.get("moving_time", 0), errors="coerce").fillna(0)
     if "gear_id" not in r.columns:
         r["gear_id"] = ""
+    if "name" not in r.columns:
+        r["name"] = ""
     agg = (
         r.groupby("gear_id")
         .agg(
@@ -154,11 +323,13 @@ def _compute_shoe_league_internal(runs_df: pd.DataFrame, shoe_lookup_df: Optiona
     agg["Total Elevation Gain (km)"] = (agg["Total_Elevation_m"] / 1000.0).round(3)
     agg["Longest Run (km)"] = agg["Longest_Run_km"].round(3)
     agg["Total Time (h)"] = (agg["Total_Time_s"] / 3600.0).round(3)
+
     def _pace(row):
         if row["Total_Distance_km"] > 0:
             return secs_to_minsec_str(row["Total_Time_s"] / row["Total_Distance_km"])
         return "-"
     agg["Average Pace (min/km)"] = agg.apply(_pace, axis=1)
+
     out = agg[[
         "gear_id", "Runs", "Total Distance (km)", "Total Elevation Gain (km)",
         "Average Run Length (km)", "Longest Run (km)", "Total Time (h)", "Average Pace (min/km)"
@@ -183,92 +354,151 @@ def _compute_shoe_league_internal(runs_df: pd.DataFrame, shoe_lookup_df: Optiona
         out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
 
-def secs_to_minsec_str(s):
-    try:
-        s = float(s)
-        if s <= 0 or s is None:
-            return "-"
-        h = int(s // 3600)
-        m = int((s % 3600) // 60)
-        sec = int(s % 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{sec:02d}"
-        return f"{m}:{sec:02d}"
-    except Exception:
-        return "-"
 
 def compute_shoe_league(runs_df: pd.DataFrame, shoe_lookup_df: Optional[pd.DataFrame] = None, athlete_id: Optional[int] = None) -> pd.DataFrame:
     out = _compute_shoe_league_internal(runs_df, shoe_lookup_df)
     out["athlete_id"] = athlete_id if athlete_id is not None else pd.NA
     return out
 
-def build_league_table(activities_df):
-    """Build the shoe league table and runs DataFrame from activities data."""
-    if activities_df is None:
-        return pd.DataFrame()
 
-    # Ensure a DataFrame
-    acts = activities_df.copy()
+def build_shoe_lookup_from_activities(runs_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Best-effort Shoe-name lookup from any gear info embedded in the activities."""
+    if runs_df is None or runs_df.empty:
+        return None
+    gear_map = {}
+    if "gear" in runs_df.columns:
+        for g in runs_df["gear"].dropna().unique():
+            if isinstance(g, dict):
+                gid = g.get("id") or g.get("uid") or ""
+                name = g.get("name") or ""
+                if gid and name:
+                    gear_map[str(gid)] = name
+    if "gear_id" in runs_df.columns and "gear_name" in runs_df.columns:
+        for gid, name in runs_df[["gear_id", "gear_name"]].dropna().itertuples(index=False, name=None):
+            gear_map[str(gid)] = name
+    if not gear_map:
+        return None
+    return pd.DataFrame({"Shoe": list(gear_map.values()), "gear_id": list(gear_map.keys())})
 
-    # Normalize known fields into a runs-like DataFrame
-    # Accept variations present in Strava exports: 'type' or 'sport_type', distances in metres
-    cols = {}
-    cols["id"] = acts.get("id", pd.Series([pd.NA]*len(acts)))
-    cols["name"] = acts.get("name", pd.Series([""]*len(acts)))
-    # distance may be in 'distance' (metres) or 'distance_km'
-    if "distance" in acts.columns:
-        cols["distance"] = acts["distance"]
-    elif "distance_km" in acts.columns:
-        cols["distance"] = acts["distance_km"] * 1000.0
-    else:
-        cols["distance"] = pd.Series([pd.NA]*len(acts))
 
-    cols["total_elevation_gain"] = acts.get("total_elevation_gain", pd.Series([0]*len(acts)))
-    cols["moving_time"] = acts.get("moving_time", pd.Series([0]*len(acts)))
-    # start date
-    if "start_date_local" in acts.columns:
-        cols["start_date_local"] = acts["start_date_local"]
-    elif "start_date" in acts.columns:
-        cols["start_date_local"] = acts["start_date"]
-    else:
-        cols["start_date_local"] = pd.Series([pd.NaT]*len(acts))
+# --------------------------------------------------------------------------- #
+# Top-level orchestration
+# --------------------------------------------------------------------------- #
 
-    # workout type and gear id if present
-    cols["workout_type"] = acts.get("workout_type", pd.Series([pd.NA]*len(acts)))
-    cols["gear_id"] = acts.get("gear_id", acts.get("gear", pd.Series([""]*len(acts))))
+def ensure_athlete_activities_and_league(script_dir: str, csv_path: str, athlete_id: Optional[int] = None) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[str]]:
+    """
+    Load existing athlete activities and the shoe-league table.
 
-    runs_df = pd.DataFrame(cols)
+    Prefers an existing league CSV. If missing but activities exist, rebuilds the
+    league: from fetched gear details (real shoe names) when available, otherwise
+    via compute_shoe_league (gear_id used as the shoe name).
 
-    # Filter to running activities if possible (many Strava exports include a 'type' column)
-    if "type" in acts.columns:
-        mask = acts["type"].astype(str).str.lower().eq("run")
-        runs_df = runs_df.loc[mask.values].reset_index(drop=True)
-    # If no 'type' column, keep all rows but downstream grouping will handle empty/irrelevant rows.
+    Returns (league_df, runs_df, csv_used). runs_df is the raw activities frame.
+    """
+    data_dir = _data_dir(script_dir)
+    athlete_activities_path = latest_activities_path(script_dir, athlete_id=athlete_id) if athlete_id is not None else None
+    athlete_csv_path = os.path.join(data_dir, f"shoe_league_table_{athlete_id}.csv") if athlete_id is not None else None
 
-    # Convert numeric columns to numeric
-    runs_df["distance"] = pd.to_numeric(runs_df["distance"], errors="coerce").fillna(0)
-    runs_df["total_elevation_gain"] = pd.to_numeric(runs_df["total_elevation_gain"], errors="coerce").fillna(0)
-    runs_df["moving_time"] = pd.to_numeric(runs_df["moving_time"], errors="coerce").fillna(0)
+    runs_df = pd.DataFrame()
+    if athlete_activities_path and os.path.exists(athlete_activities_path):
+        try:
+            runs_df = pd.read_json(athlete_activities_path)
+        except Exception:
+            runs_df = pd.DataFrame()
 
-    # Compute league using existing internal helper
-    league_df = compute_shoe_league(runs_df, shoe_lookup_df=None, athlete_id=None)
+    csv_to_use = None
+    if athlete_csv_path and os.path.exists(athlete_csv_path) and os.path.getsize(athlete_csv_path) > 0:
+        csv_to_use = athlete_csv_path
+    elif csv_path and os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+        csv_to_use = csv_path
 
-    # Ensure consistent final formatting (matching previous UI expectations)
-    # Keep Average Pace as string formatted via secs_to_minsec_str
+    df = pd.DataFrame()
+    if csv_to_use:
+        try:
+            df = pd.read_csv(csv_to_use)
+        except Exception:
+            df = pd.DataFrame()
+
+    # Build the league if we have no CSV yet but do have activities.
+    if df.empty and not runs_df.empty:
+        out_csv = athlete_csv_path or csv_path
+        all_gear_path = os.path.join(data_dir, f"all_gear_{athlete_id}.json") if athlete_id is not None else None
+        if all_gear_path and os.path.exists(all_gear_path) and os.path.getsize(all_gear_path) > 0:
+            combine_shoes(all_gear_path, athlete_activities_path, out_csv)
+            try:
+                df = pd.read_csv(out_csv) if os.path.exists(out_csv) else pd.DataFrame()
+                csv_to_use = out_csv
+            except Exception:
+                df = pd.DataFrame()
+        else:
+            shoe_lookup = build_shoe_lookup_from_activities(runs_df)
+            df = compute_shoe_league(runs_df, shoe_lookup_df=shoe_lookup, athlete_id=athlete_id)
+            try:
+                df.to_csv(out_csv, index=False)
+                csv_to_use = out_csv
+            except Exception:
+                pass
+
+    return df, runs_df, csv_to_use or csv_path
+
+
+def perform_fetch_and_build_for_athlete(script_dir: str, athlete_id: int, access_token: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    """
+    Fetch activities from Strava, save them, fetch gear details and build the shoe
+    league (with real shoe names). Returns (True, csv_path) or (False, None).
+    """
+    # Resolve an access token from the saved token if not supplied.
+    if not access_token:
+        token_info = load_token_for_athlete(athlete_id)
+        if isinstance(token_info, dict):
+            access_token = (
+                token_info.get("access_token")
+                or token_info.get("token")
+                or token_info.get("access")
+            )
+    if not access_token:
+        return False, None
+
+    # Fetch all activities (paginated).
+    activities = []
+    page = 1
+    per_page = 200
+    headers = {"Authorization": f"Bearer {access_token}"}
     try:
-        # convert Average Pace if numeric (already a string from internal helper in many cases)
-        if "Average Pace (min/km)" in league_df.columns:
-            league_df["Average Pace (min/km)"] = league_df["Average Pace (min/km)"].astype(str).replace("nan", "-")
-            # no-op if already formatted, else format numeric seconds-per-km -> M:SS
-            # detect numeric-like values and format
-            def _fmt(x):
-                try:
-                    v = float(x)
-                    return secs_to_minsec_str(v)
-                except Exception:
-                    return x
-            league_df["Average Pace (min/km)"] = league_df["Average Pace (min/km)"].apply(_fmt)
+        while True:
+            resp = requests.get(
+                "https://www.strava.com/api/v3/athlete/activities",
+                headers=headers,
+                params={"per_page": per_page, "page": page},
+                timeout=30,
+            )
+            if resp.status_code == 401:
+                return False, None
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            activities.extend(batch)
+            if len(batch) < per_page:
+                break
+            page += 1
+            time.sleep(0.2)  # be nice to the API
     except Exception:
-        pass
+        if not activities:
+            return False, None
 
-    return league_df
+    if not activities:
+        return False, None
+
+    data_dir = _data_dir(script_dir)
+    activities_path = save_activities_for_athlete(athlete_id, activities, script_dir)
+    gear_ids_path = os.path.join(data_dir, f"gear_ids_{athlete_id}.json")
+    all_gear_path = os.path.join(data_dir, f"all_gear_{athlete_id}.json")
+    out_csv = os.path.join(data_dir, f"shoe_league_table_{athlete_id}.csv")
+
+    # Gear pipeline -> real shoe names / retired / first-use in the league table.
+    extract_gear_ids_from_activities(activities_path, gear_ids_path)
+    fetch_gear_details(gear_ids_path, all_gear_path, access_token)
+    combine_shoes(all_gear_path, activities_path, out_csv)
+
+    return True, out_csv

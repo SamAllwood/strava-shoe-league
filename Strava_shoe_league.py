@@ -287,24 +287,108 @@ except Exception:
 if activities_path and os.path.exists(activities_path):
     add_download_button(activities_path, "Download activities JSON")
 
-# Shoe league table
+# ---- Shoe League Table (consistent column order + formatting) ----
 st.subheader("Shoe League Table")
 if isinstance(df, pd.DataFrame) and not df.empty:
-    st.dataframe(df)
+    league = df.copy()
+    desired_cols = [
+        "Shoe", "Runs", "Average Run Length (km)", "Average Pace (min/km)",
+        "Longest Run (km)", "Total Distance (km)", "Total Elevation Gain (km)",
+        "Total Time (h)", "First Use", "gear_id", "Retired",
+    ]
+    for c in desired_cols:
+        if c not in league.columns:
+            league[c] = pd.NA
+    # round numeric columns for display
+    for c in ["Longest Run (km)", "Total Distance (km)", "Total Elevation Gain (km)",
+              "Average Run Length (km)", "Total Time (h)"]:
+        league[c] = pd.to_numeric(league[c], errors="coerce").round(2)
+    # Runs as nullable int
+    league["Runs"] = pd.to_numeric(league["Runs"], errors="coerce").fillna(0).astype("Int64")
+    # Retired -> Yes/No (default No)
+    league["Retired"] = league["Retired"].fillna("No").replace({True: "Yes", False: "No"})
+    # keep pace as a clean string
+    league["Average Pace (min/km)"] = league["Average Pace (min/km)"].astype(str).replace("nan", "")
+    league = league[desired_cols]
+    st.dataframe(league)
 else:
     st.info("No shoe league data available. Click Refresh activities once you have connected or uploaded activities JSON.")
 
-# Runs table (plain)
-st.subheader("Runs")
-if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
-    # minimal display of runs
-    display_runs = runs_df.copy()
-    # format dates nicely if present
-    if "start_date_local" in display_runs.columns:
-        display_runs["start_date_local"] = pd.to_datetime(display_runs["start_date_local"], errors="coerce")
-    st.dataframe(display_runs)
-else:
-    st.info("No runs data available.")
+# ---- Runs by Selected Shoe (formatted; race rows highlighted) ----
+if isinstance(df, pd.DataFrame) and not df.empty and isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
+    st.subheader("Runs by Selected Shoe")
+    shoe_list = sorted([s for s in df["Shoe"].astype(str).unique() if s and s.lower() != "nan"])
+    if not shoe_list:
+        st.info("No shoes available to select.")
+    else:
+        selected = st.selectbox("Select shoe to view runs", shoe_list, key="shoe_select")
+
+        def _base_gid(gid):
+            """Normalize a gear id: blank for missing, strip any _<athlete> suffix."""
+            try:
+                if pd.isna(gid):
+                    return ""
+            except Exception:
+                if gid is None:
+                    return ""
+            g = str(gid)
+            return g.split("_", 1)[0] if "_" in g else g
+
+        shoe_to_gid = dict(zip(df["Shoe"].astype(str), df.get("gear_id", pd.Series(dtype=str))))
+        base_gid = _base_gid(shoe_to_gid.get(selected, ""))
+        if "gear_id" in runs_df.columns:
+            runs = runs_df[runs_df["gear_id"].astype(str).apply(_base_gid) == base_gid].copy()
+        else:
+            runs = pd.DataFrame()
+
+        gid = shoe_to_gid.get(selected, "")
+        display_shoe = f"{selected} [{gid}]" if gid else selected
+        st.write(f"Found {len(runs)} runs for {display_shoe} (races highlighted yellow)")
+        if runs.empty:
+            st.info("No runs found for the selected shoe.")
+        else:
+            disp = runs.copy()
+            disp["Date"] = pd.to_datetime(disp.get("start_date_local", ""), errors="coerce")
+            disp["Name"] = disp.get("name", "")
+            disp["Distance (km)"] = (pd.to_numeric(disp.get("distance", 0), errors="coerce").fillna(0) / 1000.0).round(2)
+            disp["Ascent (m)"] = pd.to_numeric(disp.get("total_elevation_gain", 0), errors="coerce").fillna(0).round(0)
+            disp["Moving Time (s)"] = pd.to_numeric(disp.get("moving_time", 0), errors="coerce").fillna(0)
+            disp["Time"] = disp["Moving Time (s)"].apply(strava_tools.secs_to_minsec_str)
+            disp["Pace (min/km)"] = disp.apply(
+                lambda r: strava_tools.secs_to_minsec_str(r["Moving Time (s)"] / r["Distance (km)"]) if r["Distance (km)"] > 0 else "-",
+                axis=1,
+            )
+            # Race flag: explicit workout_type == "1.0"
+            if "workout_type" in disp.columns and disp["workout_type"].astype(str).eq("1.0").any():
+                disp["Race"] = disp["workout_type"].astype(str).eq("1.0")
+            else:
+                disp["Race"] = False
+
+            cols = ["Date", "Name", "Distance (km)", "Ascent (m)", "Time", "Pace (min/km)", "Race"]
+            display_cols = [c for c in cols if c in disp.columns]
+
+            def _highlight_race(row):
+                return ["background-color: #fff3bf" if row.get("Race") else "" for _ in row.index]
+
+            def _fmt_strip(v, decimals=2):
+                try:
+                    if pd.isna(v):
+                        return ""
+                    return ("{:." + str(int(decimals)) + "f}").format(float(v)).rstrip("0").rstrip(".")
+                except Exception:
+                    return str(v)
+
+            display_df = disp[display_cols].sort_values(by="Date", ascending=False).head(200).reset_index(drop=True)
+            # UI-only copy so display formatting doesn't disturb dtypes
+            ui_df = display_df.copy()
+            if "Distance (km)" in ui_df.columns:
+                ui_df["Distance (km)"] = ui_df["Distance (km)"].apply(lambda v: _fmt_strip(v, 2) if pd.notna(v) else "")
+            if "Ascent (m)" in ui_df.columns:
+                ui_df["Ascent (m)"] = ui_df["Ascent (m)"].apply(lambda v: _fmt_strip(v, 0) if pd.notna(v) else "")
+            styler = ui_df.style.apply(_highlight_race, axis=1)
+            if "Date" in ui_df.columns:
+                styler = styler.format({"Date": lambda ts: ts.strftime("%d %B %Y") if not pd.isna(ts) else ""})
+            st.dataframe(styler)
 
 # small footer
 st.markdown("---")
