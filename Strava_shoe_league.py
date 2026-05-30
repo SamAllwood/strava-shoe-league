@@ -1,14 +1,11 @@
 import os
 import re
 import glob
-import time
 import uuid
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import strava_tools
 import requests
-from streamlit.errors import StreamlitSecretNotFoundError
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 data_dir = os.path.join(script_dir, "data")
@@ -47,6 +44,36 @@ def do_rerun():
         if callable(fn):
             fn()
             return
+
+def clear_query_params():
+    """Remove all URL query params in a version-compatible way.
+
+    Uses st.query_params (which edits the real page URL) rather than injecting
+    JavaScript via components.html — a component script only runs inside its
+    sandboxed iframe and cannot navigate the parent page.
+    """
+    try:
+        st.query_params.clear()
+        return
+    except Exception:
+        pass
+    for name in ("experimental_set_query_params", "set_query_params"):
+        fn = getattr(st, name, None)
+        if callable(fn):
+            try:
+                fn()
+                return
+            except Exception:
+                pass
+
+def extract_code(qp):
+    """Pull the OAuth 'code' out of query params, tolerating case/list forms."""
+    if not isinstance(qp, dict):
+        return None
+    item = qp.get("code") or qp.get("Code") or qp.get("CODE")
+    if isinstance(item, list):
+        return item[0] if item else None
+    return item if isinstance(item, str) else None
 
 def find_athlete_ids():
     ids = set()
@@ -138,73 +165,75 @@ def add_download_button(path, label=None):
     with open(path, "rb") as f:
         st.download_button(label or f"Download {os.path.basename(path)}", f, file_name=os.path.basename(path), key=key)
 
+# Handle the Strava OAuth redirect BEFORE any widgets render, so the selected
+# athlete can be seeded into the selectbox below. The 'code' is single-use, so
+# we remember the last one handled and never re-submit it (re-submitting a used
+# code is what Strava rejects with a token-exchange error).
+code_val = extract_code(get_query_params())
+if code_val and code_val != st.session_state.get("_last_code"):
+    st.session_state["_last_code"] = code_val
+    token = _exchange_code_for_token(code_val)
+    aid = None
+    if token and isinstance(token, dict) and isinstance(token.get("athlete"), dict):
+        aid = token["athlete"].get("id")
+    if aid:
+        aid = int(aid)
+        st.session_state["current_athlete_id"] = aid
+        st.session_state["athlete_select"] = aid  # seed the dropdown selection
+        msg = (None, None)
+        fetcher = getattr(strava_tools, "perform_fetch_and_build_for_athlete", None)
+        if callable(fetcher):
+            try:
+                ok, _ = fetcher(script_dir, aid)
+                if ok:
+                    msg = ("success", f"Connected as athlete {aid}. Fetched activities and rebuilt league.")
+                else:
+                    msg = ("warning", f"Connected as athlete {aid}, but the fetcher reported no output.")
+            except Exception as e:
+                msg = ("error", f"Connected as athlete {aid}, but fetch failed: {e}")
+        else:
+            msg = ("success", f"Connected as athlete {aid}.")
+        st.session_state["_flash"] = msg
+    else:
+        st.session_state["_flash"] = ("error", "Token exchange did not return an athlete. Check your Strava app settings and try connecting again.")
+    # Strip the code (and any other params) from the real page URL, then rerun.
+    clear_query_params()
+    do_rerun()
+
 # top UI
 st.title("Strava Shoe League")
 
+# show any one-shot message left by the connect flow
+flash = st.session_state.pop("_flash", None)
+if flash and flash[0]:
+    getattr(st, flash[0], st.info)(flash[1])
+
 athlete_ids = find_athlete_ids()
-col1, col2 = st.columns([2,1])
+options = [None] + athlete_ids
+col1, col2 = st.columns([2, 1])
 with col1:
-    default_athlete = st.session_state.get("current_athlete_id")
-    # A full-page reload (used after connecting) wipes session_state, so also
-    # honour an athlete id passed through the URL as ?athlete=<id>.
-    if default_athlete is None:
-        qp_athlete = get_query_params().get("athlete")
-        if isinstance(qp_athlete, list):
-            qp_athlete = qp_athlete[0] if qp_athlete else None
-        if qp_athlete:
+    # Seed the initial selection (first render only) from a connected athlete or
+    # an ?athlete=<id> URL param; thereafter the keyed widget owns its own state.
+    if "athlete_select" not in st.session_state:
+        seed = st.session_state.get("current_athlete_id")
+        if seed is None:
+            qp_athlete = get_query_params().get("athlete")
+            if isinstance(qp_athlete, list):
+                qp_athlete = qp_athlete[0] if qp_athlete else None
             try:
-                default_athlete = int(qp_athlete)
-                st.session_state["current_athlete_id"] = default_athlete
+                seed = int(qp_athlete) if qp_athlete else None
             except (TypeError, ValueError):
-                pass
-    if default_athlete in athlete_ids:
-        default_index = athlete_ids.index(default_athlete) + 1  # +1 for None at index 0
-    else:
-        default_index = 0
-    athlete = st.selectbox("Select athlete (by id)", options=[None] + athlete_ids, index=default_index)
+                seed = None
+        st.session_state["athlete_select"] = seed
+    # Guard against a stored selection that is no longer a valid option.
+    if st.session_state.get("athlete_select") not in options:
+        st.session_state["athlete_select"] = None
+    athlete = st.selectbox("Select athlete (by id)", options=options, key="athlete_select")
 with col2:
     # Build URL from secrets/env/session if possible
     auth_url = build_auth_url()
     if auth_url:
         st.markdown(f"[Connect to Strava]({auth_url})")
-        # capture code from redirect and exchange for token
-        qp = get_query_params()
-        code_val = None
-        if isinstance(qp, dict):
-            code_item = qp.get("code") or qp.get("Code") or qp.get("CODE")
-            if isinstance(code_item, list) and code_item:
-                code_val = code_item[0]
-            elif isinstance(code_item, str):
-                code_val = code_item
-        if code_val:
-            token = _exchange_code_for_token(code_val)
-            aid = None
-            if token and isinstance(token, dict) and isinstance(token.get("athlete"), dict):
-                aid = token["athlete"].get("id")
-            if aid:
-                st.session_state["current_athlete_id"] = int(aid)
-                st.success(f"Connected to Strava as athlete {aid}. Fetching activities…")
-                # Immediately fetch activities for this athlete
-                fetcher = getattr(strava_tools, "perform_fetch_and_build_for_athlete", None)
-                if callable(fetcher):
-                    try:
-                        ok, out_csv = fetcher(script_dir, int(aid))
-                        if ok:
-                            st.success("Fetched activities and rebuilt league.")
-                        else:
-                            st.warning("Fetcher ran but reported no output.")
-                    except Exception as e:
-                        st.error(f"Fetch after connect failed: {e}")
-            else:
-                st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
-            # Drop the OAuth code from the URL and reload so the dropdown picks up
-            # the new athlete. Carry the athlete id in the URL (session_state does
-            # not survive a full-page navigation) so it is re-selected on reload.
-            next_url = "window.location.pathname"
-            if aid:
-                next_url += f" + '?athlete={int(aid)}'"
-            components.html(f"<script>window.location.href = {next_url};</script>", height=0)
-            st.stop()
 
 # Refresh button: fetch activities and rebuild league if helper exists
 if st.button("Refresh activities (fetch)"):
