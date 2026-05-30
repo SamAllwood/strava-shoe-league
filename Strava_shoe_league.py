@@ -40,6 +40,14 @@ def get_query_params():
     except Exception:
         return {}
 
+def do_rerun():
+    """Rerun the script in a version-compatible way (preserves session_state)."""
+    for name in ("rerun", "experimental_rerun"):
+        fn = getattr(st, name, None)
+        if callable(fn):
+            fn()
+            return
+
 def find_athlete_ids():
     ids = set()
     # look for activities and league CSVs produced previously
@@ -137,6 +145,18 @@ athlete_ids = find_athlete_ids()
 col1, col2 = st.columns([2,1])
 with col1:
     default_athlete = st.session_state.get("current_athlete_id")
+    # A full-page reload (used after connecting) wipes session_state, so also
+    # honour an athlete id passed through the URL as ?athlete=<id>.
+    if default_athlete is None:
+        qp_athlete = get_query_params().get("athlete")
+        if isinstance(qp_athlete, list):
+            qp_athlete = qp_athlete[0] if qp_athlete else None
+        if qp_athlete:
+            try:
+                default_athlete = int(qp_athlete)
+                st.session_state["current_athlete_id"] = default_athlete
+            except (TypeError, ValueError):
+                pass
     if default_athlete in athlete_ids:
         default_index = athlete_ids.index(default_athlete) + 1  # +1 for None at index 0
     else:
@@ -177,8 +197,13 @@ with col2:
                         st.error(f"Fetch after connect failed: {e}")
             else:
                 st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
-            # Remove code from URL and reload so dropdown picks up new athlete
-            components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
+            # Drop the OAuth code from the URL and reload so the dropdown picks up
+            # the new athlete. Carry the athlete id in the URL (session_state does
+            # not survive a full-page navigation) so it is re-selected on reload.
+            next_url = "window.location.pathname"
+            if aid:
+                next_url += f" + '?athlete={int(aid)}'"
+            components.html(f"<script>window.location.href = {next_url};</script>", height=0)
             st.stop()
 
 # Refresh button: fetch activities and rebuild league if helper exists
@@ -192,51 +217,28 @@ if st.button("Refresh activities (fetch)"):
             if callable(fetcher):
                 ok, out_csv = fetcher(script_dir, int(athlete))
                 if ok:
-                    st.success("Fetched activities and rebuilt league (helper).")
+                    st.success("Fetched activities and rebuilt league.")
                 else:
                     st.warning("Fetcher ran but reported no output.")
             else:
-                # fallback: caller should have a saved activities JSON; just rebuild league from it
+                # fallback: caller should have a saved activities JSON; rebuild from it below
                 st.info("No fetch helper available; will rebuild league from existing activities JSON if present.")
         except Exception as e:
             st.error(f"Refresh failed: {e}")
 
-        # attempt to rebuild (best-effort) using ensure_athlete_activities_and_league
-        try:
-            df_new, runs_new, used_csv_new = strava_tools.ensure_athlete_activities_and_league(script_dir, os.path.join(data_dir, f"shoe_league_table_{athlete}.csv"), athlete_id=int(athlete))
-            # cache JSON so immediate reload shows updated frames reliably
-            try:
-                st.session_state["_cached_df_json"] = df_new.to_json(date_format="iso", orient="split")
-                st.session_state["_cached_runs_df_json"] = runs_new.to_json(date_format="iso", orient="split")
-                st.session_state["_cached_used_csv"] = used_csv_new
-            except Exception:
-                pass
-            st.success("Rebuilt league from activities.json.")
-        except Exception as e:
-            st.error(f"Failed to rebuild from activities.json: {e}")
+        # Rerun so the freshly-fetched data is loaded from disk and displayed.
+        # st.rerun keeps session_state (and the selected athlete) intact.
+        do_rerun()
 
-        # reload to pick up cached frames
-        components.html("<script>window.location.reload()</script>", height=0)
-        st.stop()
-
-# load frames preferring cached JSON set by refresh
+# load frames from activities.json (if present) via helper
 df = pd.DataFrame()
 runs_df = pd.DataFrame()
 used_csv = None
-if "_cached_df_json" in st.session_state:
+if athlete:
     try:
-        df = pd.read_json(st.session_state.pop("_cached_df_json"), orient="split")
-        runs_df = pd.read_json(st.session_state.pop("_cached_runs_df_json", "[]"), orient="split")
-        used_csv = st.session_state.pop("_cached_used_csv", None)
+        df, runs_df, used_csv = strava_tools.ensure_athlete_activities_and_league(script_dir, os.path.join(data_dir, f"shoe_league_table_{athlete}.csv"), athlete_id=int(athlete))
     except Exception:
         df = pd.DataFrame(); runs_df = pd.DataFrame(); used_csv = None
-else:
-    # normal load from activities.json (if present) via helper
-    if athlete:
-        try:
-            df, runs_df, used_csv = strava_tools.ensure_athlete_activities_and_league(script_dir, os.path.join(data_dir, f"shoe_league_table_{athlete}.csv"), athlete_id=int(athlete))
-        except Exception:
-            df = pd.DataFrame(); runs_df = pd.DataFrame(); used_csv = None
 
 # display
 if athlete:
