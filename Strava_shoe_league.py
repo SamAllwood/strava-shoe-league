@@ -39,7 +39,7 @@ def get_query_params():
         return st.query_params if isinstance(st.query_params, dict) else dict(st.query_params)
     except Exception:
         return {}
-    
+
 def find_athlete_ids():
     ids = set()
     # look for activities and league CSVs produced previously
@@ -63,18 +63,6 @@ def _get_secret(key: str):
 def build_auth_url():
     client_id = _get_secret("STRAVA_CLIENT_ID") or st.session_state.get("_tmp_client_id")
     redirect = _get_secret("STRAVA_REDIRECT_URI") or st.session_state.get("_tmp_redirect")
-    if not client_id or not redirect:
-        return None
-    params = {
-        "client_id": client_id,
-        "response_type": "code",
-        "redirect_uri": redirect,
-        "scope": "activity:read_all,profile:read_all",
-        "approval_prompt": "auto",
-    }
-    return "https://www.strava.com/oauth/authorize?" + "&".join(f"{k}={str(v)}" for k, v in params.items())
-
-def build_auth_url_from_params(client_id: str, redirect: str):
     if not client_id or not redirect:
         return None
     params = {
@@ -171,31 +159,27 @@ with col2:
         if code_val:
             token = _exchange_code_for_token(code_val)
             aid = None
-            if token and isinstance(token, dict):
-                if "athlete" in token and isinstance(token["athlete"], dict):
-                    aid = token["athlete"].get("id")
+            if token and isinstance(token, dict) and isinstance(token.get("athlete"), dict):
+                aid = token["athlete"].get("id")
             if aid:
                 st.session_state["current_athlete_id"] = int(aid)
                 st.success(f"Connected to Strava as athlete {aid}. Fetching activities…")
-                  # Immediately fetch activities for this athlete
-                st.write("About to fetch activities for athlete", aid) # debug line
+                # Immediately fetch activities for this athlete
                 fetcher = getattr(strava_tools, "perform_fetch_and_build_for_athlete", None)
                 if callable(fetcher):
                     try:
-                        st.write("Calling fetcher...")  # debug line
                         ok, out_csv = fetcher(script_dir, int(aid))
-                        st.write("Fetcher returned:", ok, out_csv) # debug line
                         if ok:
                             st.success("Fetched activities and rebuilt league.")
                         else:
                             st.warning("Fetcher ran but reported no output.")
                     except Exception as e:
                         st.error(f"Fetch after connect failed: {e}")
+            else:
+                st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
             # Remove code from URL and reload so dropdown picks up new athlete
             components.html("<script>window.location.href = window.location.pathname;</script>", height=0)
             st.stop()
-        else:
-            st.error("No athlete ID found in token response. Please check your Strava app settings and try again.")
 
 # Refresh button: fetch activities and rebuild league if helper exists
 if st.button("Refresh activities (fetch)"):

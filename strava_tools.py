@@ -54,7 +54,6 @@ def perform_fetch_and_build_for_athlete(script_dir, athlete_id):
     os.makedirs(data_dir, exist_ok=True)
     activities_path = os.path.join(data_dir, f"activities_{athlete_id}.json")
     with open(activities_path, "w") as f:
-        import json
         json.dump(activities, f)
 
     # 4. Build league table and save as CSV
@@ -209,7 +208,7 @@ def build_league_table(activities_df):
         return pd.DataFrame()
 
     # Ensure a DataFrame
-    acts = activities_df.copy() if not isinstance(activities_df, pd.DataFrame) else activities_df.copy()
+    acts = activities_df.copy()
 
     # Normalize known fields into a runs-like DataFrame
     # Accept variations present in Strava exports: 'type' or 'sport_type', distances in metres
