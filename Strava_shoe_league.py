@@ -390,23 +390,23 @@ if isinstance(df, pd.DataFrame) and not df.empty and isinstance(runs_df, pd.Data
                 styler = styler.format({"Date": lambda ts: ts.strftime("%d %B %Y") if not pd.isna(ts) else ""})
             st.dataframe(styler)
 
-# ---- Marathon Listing (races exceeding 42 km) ----
+# ---- Marathon Listing (races exceeding 41 km) ----
 st.markdown("---")
 st.subheader("Marathon Listing")
 if isinstance(runs_df, pd.DataFrame) and not runs_df.empty:
     mara = runs_df.copy()
     mara["_dist_km"] = pd.to_numeric(mara.get("distance", 0), errors="coerce").fillna(0) / 1000.0
     # Races are flagged by Strava with workout_type == "1.0"; a marathon here is
-    # any race exceeding 42 km.
+    # any race exceeding 41 km.
     if "workout_type" in mara.columns:
         is_race = mara["workout_type"].astype(str).eq("1.0")
     else:
         is_race = pd.Series(False, index=mara.index)
-    mara = mara[is_race & (mara["_dist_km"] > 42.0)].copy()
+    mara = mara[is_race & (mara["_dist_km"] > 41.0)].copy()
 
     st.caption(f"Marathons to date: {len(mara)}")
     if mara.empty:
-        st.info("No marathons (races over 42 km) found.")
+        st.info("No marathons found.")
     else:
         # map gear_id -> shoe name using the league table (fall back to the id)
         gid_to_shoe = {}
